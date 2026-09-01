@@ -15,7 +15,7 @@ jobs:
       UKC_ORGANIZATION: mingy
       BAIHU_REPOSITORY: uimlu/baihu-panel
       BAIHU_BRANCH: main
-      BAIHU_IMAGE: index.unikraft.io/mingy/baihu:latest
+      BAIHU_IMAGE: index.unikraft.io/mingy/baihu:${{ github.run_id }}
       BAIHU_INSTANCE: baihu
       BAIHU_VOLUME: baihu-data
 
