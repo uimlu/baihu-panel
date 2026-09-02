@@ -35,7 +35,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL https://get.kraftkit.sh | sh
+          curl --proto '=https' --tlsv1.2 -fsSL https://get.kraftkit.sh \
+            | sudo -E sh -s -- -y
           export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
           command -v kraft
           kraft version
