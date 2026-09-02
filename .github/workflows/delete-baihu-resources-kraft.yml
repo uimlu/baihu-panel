@@ -35,8 +35,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL https://get.kraftkit.sh \
-            | sudo -E sh -s -- -y
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://deb.pkg.kraftkit.sh/gpg.key \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/unikraft.gpg
+          echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/unikraft.gpg] https://deb.pkg.kraftkit.sh /' \
+            | sudo tee /etc/apt/sources.list.d/kraftkit.list >/dev/null
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends kraftkit
           export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
           command -v unikraft
           unikraft version
@@ -134,4 +139,3 @@ jobs:
             echo
             echo "未操作 OpenList 及其 Volume。"
           } >> "$GITHUB_STEP_SUMMARY"
-
