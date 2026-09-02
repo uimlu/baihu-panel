@@ -1,0 +1,176 @@
+name: Export Baihu Image from Unikraft
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "33519613088"
+        required: true
+        default: "latest"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  UKC_REGISTRY: index.unikraft.io
+  UKC_ORGANIZATION: mingy
+  BAIHU_IMAGE_NAME: baihu
+
+jobs:
+  export-baihu-image:
+    name: Export Baihu OCI image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Skopeo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y skopeo jq
+
+          skopeo --version
+
+      - name: Check required secret
+        shell: bash
+        env:
+          UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${UKC_TOKEN:-}" ]; then
+            echo "错误：没有找到 GitHub Secret UKC_TOKEN"
+            exit 1
+          fi
+
+          if [[ "$UKC_TOKEN" == Bearer\ * ]]; then
+            echo "错误：UKC_TOKEN 不要包含 Bearer 前缀"
+            exit 1
+          fi
+
+          if [[ "$UKC_TOKEN" =~ [[:space:]] ]]; then
+            echo "错误：UKC_TOKEN 包含空格、换行或其他空白字符"
+            exit 1
+          fi
+
+          echo "UKC_TOKEN 检查通过"
+
+      - name: Login to Unikraft Registry
+        shell: bash
+        env:
+          UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "$UKC_TOKEN" | skopeo login \
+            --username "$UKC_ORGANIZATION" \
+            --password-stdin \
+            "$UKC_REGISTRY"
+
+          echo "Unikraft Registry 登录成功"
+
+      - name: Inspect Baihu image
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          SOURCE_IMAGE="docker://${UKC_REGISTRY}/${UKC_ORGANIZATION}/${BAIHU_IMAGE_NAME}:${IMAGE_TAG}"
+
+          echo "准备导出的镜像：$SOURCE_IMAGE"
+
+          skopeo inspect "$SOURCE_IMAGE" | tee baihu-image-info.json
+
+          echo ""
+          echo "镜像摘要："
+
+          jq -r '
+            {
+              name: .Name,
+              digest: .Digest,
+              architecture: .Architecture,
+              os: .Os,
+              created: .Created,
+              layers: (.Layers | length)
+            }
+          ' baihu-image-info.json
+
+      - name: Export Baihu image as OCI archive
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p export
+
+          SOURCE_IMAGE="docker://${UKC_REGISTRY}/${UKC_ORGANIZATION}/${BAIHU_IMAGE_NAME}:${IMAGE_TAG}"
+          OUTPUT_FILE="export/baihu-${IMAGE_TAG}.oci.tar"
+
+          echo "正在导出：$SOURCE_IMAGE"
+          echo "输出文件：$OUTPUT_FILE"
+
+          skopeo copy \
+            "$SOURCE_IMAGE" \
+            "oci-archive:${OUTPUT_FILE}"
+
+          gzip -9 "$OUTPUT_FILE"
+
+          echo ""
+          echo "导出完成："
+          ls -lh export
+
+      - name: Create checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd export
+
+          sha256sum *.gz | tee SHA256SUMS.txt
+
+          echo ""
+          echo "校验文件："
+          cat SHA256SUMS.txt
+
+      - name: Upload Baihu image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baihu-image-${{ inputs.image_tag }}
+          path: |
+            export/*.tar.gz
+            export/SHA256SUMS.txt
+            baihu-image-info.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Show download information
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## 白虎面板镜像导出完成"
+            echo ""
+            echo "**镜像：** \`${UKC_REGISTRY}/${UKC_ORGANIZATION}/${BAIHU_IMAGE_NAME}:${IMAGE_TAG}\`"
+            echo ""
+            echo "**导出格式：** OCI Archive"
+            echo ""
+            echo "**下载位置：** 当前 Actions 运行记录底部的 Artifacts"
+            echo ""
+            echo "Artifact 名称：\`baihu-image-${IMAGE_TAG}\`"
+            echo ""
+            echo "本工作流没有删除远程镜像、实例或 Volume。"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo ""
+          echo "========================================="
+          echo "白虎镜像导出完成"
+          echo "Artifact：baihu-image-$IMAGE_TAG"
+          echo "请到当前 Actions 运行记录底部下载"
+          echo "========================================="
