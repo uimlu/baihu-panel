@@ -1,0 +1,131 @@
+name: Delete Baihu Resources (Kraft CLI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "要删除的镜像标签，例如 33519613088 或 GitHub run_id"
+        required: true
+        default: "33519613088"
+        type: string
+      confirmation:
+        description: "请输入 DELETE_BAIHU 以确认删除实例、镜像和 Volume"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  UKC_METRO: fra
+  UKC_ORGANIZATION: mingy
+  BAIHU_INSTANCE: baihu
+  BAIHU_VOLUME: baihu-data
+  BAIHU_IMAGE_REPOSITORY: mingy/baihu
+
+jobs:
+  delete-baihu:
+    name: Delete Baihu resources
+    runs-on: ubuntu-latest
+    env:
+      UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
+
+    steps:
+      - name: Install latest Kraft CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://get.kraftkit.sh | sh
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          command -v kraft
+          kraft version
+
+      - name: Validate deletion confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "DELETE_BAIHU" ]; then
+            echo "错误：确认文本必须精确等于 DELETE_BAIHU。"
+            exit 1
+          fi
+          if [ -z "${UKC_TOKEN:-}" ]; then
+            echo "错误：没有找到 GitHub Secret UKC_TOKEN。"
+            exit 1
+          fi
+          if [[ "$UKC_TOKEN" == Bearer\ * || "$UKC_TOKEN" =~ [[:space:]] ]]; then
+            echo "错误：UKC_TOKEN 不要包含 Bearer 前缀或空白字符。"
+            exit 1
+          fi
+
+      - name: Show resources before deletion
+        shell: bash
+        run: |
+          set +e
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" instance list
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" img list
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" vol list
+
+      - name: Stop and detach Baihu volume
+        shell: bash
+        run: |
+          set +e
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
+            instance stop --wait 30s "$BAIHU_INSTANCE"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
+            vol detach --from "$BAIHU_INSTANCE" "$BAIHU_VOLUME"
+
+      - name: Remove Baihu instance
+        shell: bash
+        run: |
+          set +e
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
+            instance remove "$BAIHU_INSTANCE"
+          INSTANCE_CODE=$?
+          if [ "$INSTANCE_CODE" -ne 0 ]; then
+            echo "实例可能不存在，继续删除镜像和 Volume。"
+          fi
+
+      - name: Remove Baihu image tag
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          set +e
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          IMAGE_REF="$BAIHU_IMAGE_REPOSITORY:$IMAGE_TAG"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
+            img remove "$IMAGE_REF"
+          IMAGE_CODE=$?
+          if [ "$IMAGE_CODE" -ne 0 ]; then
+            echo "未找到镜像 $IMAGE_REF，继续删除 Volume。"
+          fi
+
+      - name: Remove Baihu volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
+            vol remove "$BAIHU_VOLUME"
+          echo "Volume $BAIHU_VOLUME 删除成功。"
+
+      - name: Write deletion summary
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          {
+            echo "## 白虎面板资源清理完成"
+            echo
+            echo "- Metro：$UKC_METRO"
+            echo "- 实例：$BAIHU_INSTANCE"
+            echo "- 镜像：$BAIHU_IMAGE_REPOSITORY:$IMAGE_TAG"
+            echo "- Volume：$BAIHU_VOLUME"
+            echo
+            echo "未操作 OpenList 及其 Volume。"
+          } >> "$GITHUB_STEP_SUMMARY"
