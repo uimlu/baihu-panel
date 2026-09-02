@@ -1,15 +1,15 @@
-name: Delete Baihu Resources (Unikraft CLI)
+name: Delete Baihu Resources (Simple)
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "要删除的镜像标签，例如 33519613088 或 GitHub run_id"
+        description: "要删除的镜像标签"
         required: true
         default: "33519613088"
         type: string
       confirmation:
-        description: "请输入 DELETE_BAIHU 以确认删除实例、镜像和 Volume"
+        description: "请输入 DELETE_BAIHU 确认删除"
         required: true
         type: string
 
@@ -18,20 +18,20 @@ permissions:
 
 env:
   UKC_METRO: fra
-  UKC_ORGANIZATION: mingy
   BAIHU_INSTANCE: baihu
   BAIHU_VOLUME: baihu-data
-  BAIHU_IMAGE_REPOSITORY: mingy/baihu
+  BAIHU_IMAGE: mingy/baihu
+  KRAFTKIT_NO_WARN_CLOUD_DEPRECATION: "1"
 
 jobs:
-  delete-baihu:
-    name: Delete Baihu resources
+  delete:
+    name: Delete Baihu instance, image and volume
     runs-on: ubuntu-latest
     env:
       UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
 
     steps:
-      - name: Install latest Unikraft CLI
+      - name: Install KraftKit without prompts
         shell: bash
         run: |
           set -euo pipefail
@@ -42,100 +42,51 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/kraftkit.list >/dev/null
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends kraftkit
-          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
-          command -v unikraft
-          unikraft version
+          command -v kraft
+          kraft version
 
-      - name: Validate deletion confirmation
+      - name: Confirm deletion
+        shell: bash
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
-        shell: bash
         run: |
           set -euo pipefail
-          if [ "$CONFIRMATION" != "DELETE_BAIHU" ]; then
-            echo "错误：确认文本必须精确等于 DELETE_BAIHU。"
-            exit 1
-          fi
-          if [ -z "${UKC_TOKEN:-}" ]; then
-            echo "错误：没有找到 GitHub Secret UKC_TOKEN。"
-            exit 1
-          fi
-          if [[ "$UKC_TOKEN" == Bearer\ * || "$UKC_TOKEN" =~ [[:space:]] ]]; then
-            echo "错误：UKC_TOKEN 不要包含 Bearer 前缀或空白字符。"
-            exit 1
-          fi
+          test "$CONFIRMATION" = "DELETE_BAIHU"
+          test -n "${UKC_TOKEN:-}"
 
-      - name: List target resources
+      - name: List Baihu resources
         shell: bash
         run: |
           set +e
-          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
-          unikraft instances list
-          unikraft volumes list
-          unikraft images list
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" instance list
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" img list
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" vol list
           exit 0
 
-      - name: Remove Baihu instance when present
+      - name: Delete Baihu resources
         shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
-          INSTANCES="$(unikraft instances list 2>&1 || true)"
-          if printf '%s\n' "$INSTANCES" | grep -Fq "$BAIHU_INSTANCE"; then
-            unikraft instances stop "$BAIHU_INSTANCE" || true
-            unikraft volumes detach "$BAIHU_VOLUME" --from "$BAIHU_INSTANCE" || true
-            unikraft instances delete "$BAIHU_INSTANCE"
-            echo "实例 $BAIHU_INSTANCE 删除成功。"
-          else
-            echo "未找到实例 $BAIHU_INSTANCE，视为已清理。"
-          fi
-
-      - name: Remove Baihu image tag when present
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
-        shell: bash
         run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
-          IMAGE_REF="$BAIHU_IMAGE_REPOSITORY:$IMAGE_TAG"
-          IMAGES="$(unikraft images list 2>&1 || true)"
-          if printf '%s\n' "$IMAGES" | grep -Fq "$IMAGE_REF" || \
-             printf '%s\n' "$IMAGES" | grep -Fq "$IMAGE_TAG"; then
-            unikraft images delete "$IMAGE_REF"
-            echo "镜像 $IMAGE_REF 删除成功。"
-          else
-            echo "未找到镜像 $IMAGE_REF，视为已清理。"
-          fi
+          set +e
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" instance remove "$BAIHU_INSTANCE"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" img remove "$BAIHU_IMAGE:$IMAGE_TAG"
+          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" vol remove "$BAIHU_VOLUME"
+          exit 0
 
-      - name: Remove Baihu volume when present
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
-          VOLUMES="$(unikraft volumes list 2>&1 || true)"
-          if printf '%s\n' "$VOLUMES" | grep -Fq "$BAIHU_VOLUME"; then
-            if unikraft volume delete "$BAIHU_VOLUME"; then
-              :
-            else
-              unikraft volumes delete "$BAIHU_VOLUME"
-            fi
-            echo "Volume $BAIHU_VOLUME 删除成功。"
-          else
-            echo "未找到 Volume $BAIHU_VOLUME，视为已清理。"
-          fi
-
-      - name: Write deletion summary
+      - name: Write summary
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
         shell: bash
         run: |
           {
-            echo "## 白虎面板资源清理完成"
+            echo "## 白虎面板清理命令已执行"
             echo
             echo "- Metro：$UKC_METRO"
             echo "- 实例：$BAIHU_INSTANCE"
-            echo "- 镜像：$BAIHU_IMAGE_REPOSITORY:$IMAGE_TAG"
+            echo "- 镜像：$BAIHU_IMAGE:$IMAGE_TAG"
             echo "- Volume：$BAIHU_VOLUME"
             echo
-            echo "未操作 OpenList 及其 Volume。"
+            echo "删除命令即使遇到资源不存在也会继续完成。请以上一步资源列表和 Unikraft 控制台为准确认结果。"
           } >> "$GITHUB_STEP_SUMMARY"
+
