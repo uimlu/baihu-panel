@@ -1,4 +1,4 @@
-name: Delete Baihu Resources (Kraft CLI)
+name: Delete Baihu Resources (Unikraft CLI)
 
 on:
   workflow_dispatch:
@@ -31,15 +31,15 @@ jobs:
       UKC_TOKEN: ${{ secrets.UKC_TOKEN }}
 
     steps:
-      - name: Install latest Kraft CLI
+      - name: Install latest Unikraft CLI
         shell: bash
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -fsSL https://get.kraftkit.sh \
             | sudo -E sh -s -- -y
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-          command -v kraft
-          kraft version
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+          command -v unikraft
+          unikraft version
 
       - name: Validate deletion confirmation
         env:
@@ -60,60 +60,64 @@ jobs:
             exit 1
           fi
 
-      - name: Show resources before deletion
+      - name: List target resources
         shell: bash
         run: |
           set +e
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" instance list
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" img list
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" vol list
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+          unikraft instances list
+          unikraft volumes list
+          unikraft images list
+          exit 0
 
-      - name: Stop and detach Baihu volume
+      - name: Remove Baihu instance when present
         shell: bash
         run: |
-          set +e
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
-            instance stop --wait 30s "$BAIHU_INSTANCE"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
-            vol detach --from "$BAIHU_INSTANCE" "$BAIHU_VOLUME"
-
-      - name: Remove Baihu instance
-        shell: bash
-        run: |
-          set +e
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
-            instance remove "$BAIHU_INSTANCE"
-          INSTANCE_CODE=$?
-          if [ "$INSTANCE_CODE" -ne 0 ]; then
-            echo "实例可能不存在，继续删除镜像和 Volume。"
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+          INSTANCES="$(unikraft instances list 2>&1 || true)"
+          if printf '%s\n' "$INSTANCES" | grep -Fq "$BAIHU_INSTANCE"; then
+            unikraft instances stop "$BAIHU_INSTANCE" || true
+            unikraft volumes detach "$BAIHU_VOLUME" --from "$BAIHU_INSTANCE" || true
+            unikraft instances delete "$BAIHU_INSTANCE"
+            echo "实例 $BAIHU_INSTANCE 删除成功。"
+          else
+            echo "未找到实例 $BAIHU_INSTANCE，视为已清理。"
           fi
 
-      - name: Remove Baihu image tag
+      - name: Remove Baihu image tag when present
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
         shell: bash
         run: |
-          set +e
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
           IMAGE_REF="$BAIHU_IMAGE_REPOSITORY:$IMAGE_TAG"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
-            img remove "$IMAGE_REF"
-          IMAGE_CODE=$?
-          if [ "$IMAGE_CODE" -ne 0 ]; then
-            echo "未找到镜像 $IMAGE_REF，继续删除 Volume。"
+          IMAGES="$(unikraft images list 2>&1 || true)"
+          if printf '%s\n' "$IMAGES" | grep -Fq "$IMAGE_REF" || \
+             printf '%s\n' "$IMAGES" | grep -Fq "$IMAGE_TAG"; then
+            unikraft images delete "$IMAGE_REF"
+            echo "镜像 $IMAGE_REF 删除成功。"
+          else
+            echo "未找到镜像 $IMAGE_REF，视为已清理。"
           fi
 
-      - name: Remove Baihu volume
+      - name: Remove Baihu volume when present
         shell: bash
         run: |
           set -euo pipefail
-          export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-          kraft cloud --metro "$UKC_METRO" --token "$UKC_TOKEN" \
-            vol remove "$BAIHU_VOLUME"
-          echo "Volume $BAIHU_VOLUME 删除成功。"
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+          VOLUMES="$(unikraft volumes list 2>&1 || true)"
+          if printf '%s\n' "$VOLUMES" | grep -Fq "$BAIHU_VOLUME"; then
+            if unikraft volume delete "$BAIHU_VOLUME"; then
+              :
+            else
+              unikraft volumes delete "$BAIHU_VOLUME"
+            fi
+            echo "Volume $BAIHU_VOLUME 删除成功。"
+          else
+            echo "未找到 Volume $BAIHU_VOLUME，视为已清理。"
+          fi
 
       - name: Write deletion summary
         env:
@@ -130,3 +134,4 @@ jobs:
             echo
             echo "未操作 OpenList 及其 Volume。"
           } >> "$GITHUB_STEP_SUMMARY"
+
